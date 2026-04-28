@@ -18,7 +18,6 @@ export async function GET(request: NextRequest) {
       .eq('side', 'sell')
       .gte('date', startDate)
       .lte('date', endDate);
-    // console.log('Sell trades in range:', sellTrades);
 
     if (sellsError) {
       console.error('Error fetching sell trades:', sellsError);

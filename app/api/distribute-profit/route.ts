@@ -69,19 +69,7 @@ export async function POST(request: NextRequest) {
         profit: clientProfit,
       });
     }
-
-
-
-    // Record distribution
-    // const distId = generateId();
-    // await supabase.from('profit_distributions').insert({
-    //   id: distId,
-    //   period_start: periodStart,
-    //   period_end: periodEnd,
-    //   total_profit: totalRealizedProfit,
-    // });
-    console.log('totalRealizedProfit', totalRealizedProfit)
-    console.log('breakdown', breakdown)
+  
     return NextResponse.json({
       success: true,
       totalProfit: totalRealizedProfit,

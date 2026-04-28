@@ -21,10 +21,8 @@ function readCSV(filePath) {
 }
 
 async function migrate() {
-  console.log('Starting migration...');
 
   // 1. Import clients
-  console.log('Importing clients...');
   const clients = readCSV('data/clients.csv');
   for (const client of clients) {
     const { error } = await supabase
@@ -38,10 +36,8 @@ async function migrate() {
       }, { onConflict: 'id' });
     if (error) console.error('Client error:', client.id, error.message);
   }
-  console.log(`Imported ${clients.length} clients`);
 
   // 2. Import market prices
-  console.log('Importing market prices...');
   const prices = readCSV('data/market_prices.csv');
   for (const price of prices) {
     const { error } = await supabase
@@ -53,10 +49,8 @@ async function migrate() {
       }, { onConflict: 'symbol' });
     if (error) console.error('Price error:', price.symbol, error.message);
   }
-  console.log(`Imported ${prices.length} market prices`);
 
   // 3. Import trades (no client_id initially)
-  console.log('Importing trades...');
   const trades = readCSV('data/trades.csv');
   // Optional: create a default client for unassigned trades
   let defaultClientId = null;
@@ -93,12 +87,10 @@ async function migrate() {
       }, { onConflict: 'id' });
     if (error) console.error('Trade error:', trade.id, error.message);
   }
-  console.log(`Imported ${trades.length} trades`);
 
   // 4. Import capital transactions (if file exists)
   const capitalTxnPath = 'data/capital_transactions.csv';
   if (fs.existsSync(path.join(__dirname, '..', capitalTxnPath))) {
-    console.log('Importing capital transactions...');
     const txns = readCSV(capitalTxnPath);
     for (const txn of txns) {
       // date column exists in capital_transactions.csv
@@ -114,11 +106,9 @@ async function migrate() {
         });
       if (error) console.error('Capital txn error:', txn.id, error.message);
     }
-    console.log(`Imported ${txns.length} capital transactions`);
   }
 
   // 5. Update client cash_balance from capital transactions
-  console.log('Updating client cash balances...');
   const { data: allClients } = await supabase.from('clients').select('id');
   for (const client of allClients) {
     const { data: txns } = await supabase
@@ -133,7 +123,6 @@ async function migrate() {
     await supabase.from('clients').update({ cash_balance: balance }).eq('id', client.id);
   }
 
-  console.log('Migration complete!');
 }
 
 migrate().catch(console.error);

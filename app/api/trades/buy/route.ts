@@ -30,7 +30,6 @@ export async function POST(request: NextRequest) {
     };
 
     const { error } = await supabase.from('trades').insert([newTrade]);
-    console.log('Inserting trade:', newTrade, 'Error:', error);
     if (error) throw error;
 
     return NextResponse.json({ success: true, trade: newTrade });
