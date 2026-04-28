@@ -1,9 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getClientsWithCapital, addClient, addCapitalTransaction, distributeProfitForPeriod, getClientProfitForPeriod } from '@/app/actions-clients';
 
-type ProfitResult = { success: false; message: string } | { success: true; totalProfit: number; distributed: number };
+type ProfitResult = { success: false; message: string } | { success: true; totalProfit: number;
+  breakDown: Array<{
+    clientName: string,
+    share: number,
+    profit: number
+  }>
+ };
 
 export default function ClientsPage() {
   const [clients, setClients] = useState<any[]>([]);
@@ -22,13 +27,21 @@ export default function ClientsPage() {
 
   async function loadData() {
     setLoading(true);
-    const data = await getClientsWithCapital();
-    setClients(data.clientData);
-    setTotalCapital(data.totalCapital || 0);
-    setGlobalCash(data.globalCash || 0);
-    setGlobalInvested(data.globalInvested || 0);
-    setGlobalStockValue(data.globalStockValue || 0);
-    setLoading(false);
+    try {
+      const res = await fetch('/api/clients');
+      const data = await res.json();
+      
+      setClients(data.clientData);
+      setTotalCapital(data.totalCapital || 0);
+      setGlobalCash(data.globalCash || 0);
+      setGlobalInvested(data.globalInvested || 0);
+      setGlobalStockValue(data.globalStockValue || 0);
+    } catch (err) {
+      console.error(err);
+      alert('Error loading data');
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -36,21 +49,41 @@ export default function ClientsPage() {
   }, []);
 
   async function handleAddClient(formData: FormData) {
-    await addClient(formData);
-    setShowAddClient(false);
-    loadData();
+    const name = formData.get('name') as string;
+    const initialCapital = Number(formData.get('initialCapital')) || 0;
+    try {
+      const res = await fetch('/api/clients/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, initialCapital }),
+      });
+      if (!res.ok) throw new Error();
+      setShowAddClient(false);
+      loadData();
+    } catch (err) {
+      alert('Error adding client');
+    }
   }
 
   async function handleCapitalTransaction(clientId: string) {
-    const formData = new FormData();
-    formData.append('clientId', clientId);
-    formData.append('amount', String(txnAmount));
-    formData.append('type', txnType);
-    formData.append('description', `${txnType} by user`);
-    await addCapitalTransaction(formData);
-    setSelectedClient(null);
-    setTxnAmount(0);
-    loadData();
+    try {
+      const res = await fetch('/api/capital-transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId,
+          amount: txnAmount,
+          type: txnType,
+          description: `${txnType} by user`,
+        }),
+      });
+      if (!res.ok) throw new Error();
+      setSelectedClient(null);
+      setTxnAmount(0);
+      loadData();
+    } catch (err) {
+      alert('Error processing transaction');
+    }
   }
 
   async function handleDistributeProfit() {
@@ -58,13 +91,29 @@ export default function ClientsPage() {
       alert('Select date range');
       return;
     }
-    const result = await distributeProfitForPeriod(periodStart, periodEnd) as ProfitResult;
-    setProfitResult(result);
-    if (result.success) {
-      loadData();
-      setTimeout(() => setProfitResult(null), 3000);
+    try {
+      const res = await fetch('/api/distribute-profit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ periodStart, periodEnd }),
+      });
+      const result = await res.json();
+      if (result.success) {
+        setProfitResult({ success: true, totalProfit: result.totalProfit, breakDown: result.breakdown });
+        loadData(); // ← REFRESH CLIENT TABLE
+      } else {
+        setProfitResult({ success: false, message: result.message || result.error || 'Distribution failed' });
+      }
+    } catch (err) {
+      alert('Error distributing profit');
     }
   }
+
+  // Helper to calculate percentage safely
+  const getPercentage = (capital: number) => {
+    if (totalCapital === 0) return 0;
+    return (capital / totalCapital) * 100;
+  };
 
   if (loading) return <div className="p-6">Loading...</div>;
 
@@ -75,60 +124,96 @@ export default function ClientsPage() {
           <h1 className="text-3xl font-bold">Client Capital Management</h1>
           <button onClick={() => setShowAddClient(true)} className="bg-blue-600 text-white px-4 py-2 rounded">+ Add Client</button>
         </div>
-            <div className="bg-white rounded-lg shadow p-4 mb-4">
-            <div className="flex flex-wrap gap-4">
-                <div><div className="text-sm text-gray-500">Total Capital</div><div className="text-xl font-bold">{totalCapital.toFixed(2)} PKR</div></div>
-                <div><div className="text-sm text-gray-500">Total Cash</div><div className="text-xl font-bold">{(totalCapital - globalInvested).toFixed(2)} PKR</div></div>
-                <div><div className="text-sm text-gray-500">Total Invested</div><div className="text-xl font-bold">{globalInvested.toFixed(2)} PKR</div></div>
-                <div><div className="text-sm text-gray-500">Portfolio Value</div><div className="text-xl font-bold">{globalStockValue.toFixed(2)} PKR</div></div>
-            </div>
-            </div>
+
+        <div className="bg-white rounded-lg shadow p-4 mb-4">
+          <div className="flex flex-wrap gap-4">
+            <div><div className="text-sm text-gray-500">Total Capital</div><div className="text-xl font-bold">{totalCapital.toFixed(2)} PKR</div></div>
+            <div><div className="text-sm text-gray-500">Total Cash</div><div className="text-xl font-bold">{globalCash.toFixed(2)} PKR</div></div>
+            <div><div className="text-sm text-gray-500">Total Invested</div><div className="text-xl font-bold">{globalInvested.toFixed(2)} PKR</div></div>
+            <div><div className="text-sm text-gray-500">Portfolio Value</div><div className="text-xl font-bold">{globalStockValue.toFixed(2)} PKR</div></div>
+          </div>
+        </div>
+
         {/* Client Table */}
         <div className="bg-white rounded-lg shadow overflow-x-auto mb-8">
           <table className="w-full">
             <thead className="bg-gray-50">
-              <tr><th className="px-4 py-3 text-left">Client</th><th className="px-4 py-3 text-right">Current Capital</th><th className="px-4 py-3 text-right">Total Profit Earned</th><th className="px-4 py-3 text-center">Actions</th></tr>
+              <tr>
+                <th className="px-4 py-3 text-left">Client</th>
+                <th className="px-4 py-3 text-right">Current Capital</th>
+                <th className="px-4 py-3 text-right">Share of Capital</th>
+                <th className="px-4 py-3 text-right">Total Profit Earned</th>
+                <th className="px-4 py-3 text-center">Actions</th>
+              </tr>
             </thead>
             <tbody>
-              {clients.map(c => (
+              {clients?.map(c => (
                 <tr key={c.id} className="border-t">
                   <td className="px-4 py-2">{c.name}</td>
-                  <td className="px-4 py-2 text-right">{c.currentCapital.toFixed(2)} PKR</td>
-                  <td className="px-4 py-2 text-right">{c.totalProfitEarned.toFixed(2)} PKR</td>
+                  <td className="px-4 py-2 text-right">{c.currentCapital?.toFixed(2)} PKR</td>
+                  <td className="px-4 py-2 text-right">{getPercentage(c.currentCapital || 0).toFixed(2)}%</td>
+                  <td className="px-4 py-2 text-right">{c.totalProfitEarned?.toFixed(2)} PKR</td>
                   <td className="px-4 py-2 text-center flex gap-2 justify-center">
-                    <button onClick={() => { setSelectedClient(c.id); setTxnType('deposit'); setTxnAmount(0); }} className="text-blue-600 mr-2">Deposit</button>
+                    <button onClick={() => { setSelectedClient(c.id); setTxnType('deposit'); setTxnAmount(0); }} className="text-blue-600">Deposit</button>
                     <div className='mx-2'>|</div>
                     <button onClick={() => { setSelectedClient(c.id); setTxnType('withdrawal'); setTxnAmount(0); }} className="text-red-600">Withdraw</button>
-                  </td>
-                </tr>
+                   </td>
+                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        
 
         {/* Profit Distribution Panel */}
         <div className="bg-white rounded-lg shadow p-6 mb-8">
           <h2 className="text-xl font-semibold mb-4">Distribute Monthly Profit</h2>
-          <div className="flex gap-4 items-end">
+          <div className="flex gap-4 items-end flex-wrap">
             <div><label className="block text-sm">Period Start</label><input type="date" className="border rounded px-3 py-2" value={periodStart} onChange={e => setPeriodStart(e.target.value)} /></div>
             <div><label className="block text-sm">Period End</label><input type="date" className="border rounded px-3 py-2" value={periodEnd} onChange={e => setPeriodEnd(e.target.value)} /></div>
             <button onClick={handleDistributeProfit} className="bg-green-600 text-white px-4 py-2 rounded">Distribute Realized Profit</button>
           </div>
           {profitResult && (
-            <div className={`mt-4 p-2 rounded ${profitResult.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-              {profitResult.success ? `Profit distributed: ${profitResult.totalProfit} PKR` : profitResult.message}
+            <div className={`mt-4 p-4 rounded ${profitResult.success ? 'bg-green-100' : 'bg-red-100'}`}>
+              {profitResult.success ? (
+                <>
+                  <p className="text-lg font-bold text-green-700 mb-2">Total Realized Profit: {profitResult.totalProfit.toFixed(2)} PKR</p>
+                  <h3 className="font-semibold mb-2">Allocation Breakdown</h3>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white border border-gray-300 rounded">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-sm font-medium text-gray-700">Client</th>
+                          <th className="px-3 py-2 text-right text-sm font-medium text-gray-700">% Share of Capital</th>
+                          <th className="px-3 py-2 text-right text-sm font-medium text-gray-700">Profit Allocated (PKR)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {profitResult.breakDown && profitResult.breakDown.map((b, idx) => (
+                          <tr key={idx} className="border-t">
+                            <td className="px-3 py-2 text-sm">{b.clientName}</td>
+                            <td className="px-3 py-2 text-right text-sm">{b.share.toFixed(2)}%</td>
+                            <td className="px-3 py-2 text-right text-sm">{b.profit.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              ) : (
+                <p className="text-lg font-bold text-red-700">{profitResult.message}</p>
+              )}
             </div>
           )}
         </div>
 
         {/* Add Client Modal */}
         {showAddClient && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center mb-2">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 w-96">
               <h3 className="text-lg font-bold mb-4">New Client</h3>
               <form action={handleAddClient}>
                 <input name="name" placeholder="Client Name" required className="w-full border rounded px-3 py-2 mb-4" />
+                <input name="initialCapital" type="number" step="0.01" placeholder="Initial Capital (optional)" className="w-full border rounded px-3 py-2 mb-4" />
                 <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded">Add</button>
                 <button type="button" onClick={() => setShowAddClient(false)} className="w-full mt-2 bg-red-600 text-white py-2 rounded">Cancel</button>
               </form>
@@ -138,7 +223,7 @@ export default function ClientsPage() {
 
         {/* Deposit/Withdraw Modal */}
         {selectedClient && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg p-6 w-96">
               <h3 className="text-lg font-bold mb-4">{txnType === 'deposit' ? 'Deposit' : 'Withdraw'} for {clients.find(c => c.id === selectedClient)?.name}</h3>
               <input type="number" placeholder="Amount" value={txnAmount} onChange={e => setTxnAmount(Number(e.target.value))} className="w-full border rounded px-3 py-2 mb-4" />

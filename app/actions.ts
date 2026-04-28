@@ -1,26 +1,23 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { readTrades, writeTrades, readMarketPrices, writeMarketPrices } from '@/app/lib/csv';
-import { Trade, SellRecord, CashTransaction } from '@/app/types';
-import { readCashTransactions, writeCashTransactions, getGlobalCashBalance } from '@/app/lib/csv-cash';
-
+import { readTrades, addTrade, updateTrade, readMarketPrices, writeMarketPrices } from '@/app/lib/db';
+import { Trade } from '@/app/types';
 
 function generateId(): string {
   return Date.now().toString() + '-' + Math.random().toString(36).substr(2, 6);
 }
 
-// ---------- Trade Management ----------
 export async function addBuyTrade(formData: FormData) {
   const symbol = (formData.get('symbol') as string).toUpperCase();
   const companyName = formData.get('companyName') as string;
   const quantity = Number(formData.get('quantity'));
   const price = Number(formData.get('price'));
   const date = formData.get('date') as string;
+  const clientId = formData.get('clientId') as string;
 
-  if (!symbol || !companyName || !quantity || !price || !date) throw new Error('Missing fields');
+  if (!symbol || !companyName || !quantity || !price || !date || !clientId) throw new Error('Missing fields');
 
-  const trades = await readTrades();
   const newTrade: Trade = {
     id: generateId(),
     symbol,
@@ -29,25 +26,11 @@ export async function addBuyTrade(formData: FormData) {
     quantity,
     price,
     date,
-    remainingQty: quantity,
+    remainingqty: quantity,
     buyTradeId: null,
+    clientId,
   };
-  trades.push(newTrade);
-  await writeTrades(trades);
-
-  const totalCost = quantity * price;
-  const cashTx: CashTransaction = {
-    id: generateId(),
-    amount: -totalCost,
-    date,
-    type: 'buy',
-    description: `Bought ${quantity} ${symbol} @ ${price}`,
-    clientId: null,
-  };
-  const existingCash = await readCashTransactions();
-  existingCash.push(cashTx);
-  await writeCashTransactions(existingCash);
-
+  await addTrade(newTrade);
   revalidatePath('/');
 }
 
@@ -60,15 +43,15 @@ export async function addSellTrade(formData: FormData) {
   if (!buyTradeId || !quantity || !price || !date) throw new Error('Missing fields');
 
   const trades = await readTrades();
-  const buyTradeIndex = trades.findIndex(t => t.id === buyTradeId && t.side === 'buy');
-  if (buyTradeIndex === -1) throw new Error('Buy trade not found');
+  const buyTrade = trades.find(t => t.id === buyTradeId && t.side === 'buy');
+  if (!buyTrade) throw new Error('Buy trade not found');
+  if (quantity > buyTrade.remainingqty) throw new Error('Not enough shares');
 
-  const buyTrade = trades[buyTradeIndex];
-  if (quantity > buyTrade.remainingQty) throw new Error('Not enough shares');
+  // Update the buy trade's remaining quantity
+  buyTrade.remainingqty -= quantity;
+  await updateTrade(buyTrade);
 
-  buyTrade.remainingQty -= quantity;
-  trades[buyTradeIndex] = buyTrade;
-
+  // Create sell trade
   const sellTrade: Trade = {
     id: generateId(),
     symbol: buyTrade.symbol,
@@ -77,76 +60,33 @@ export async function addSellTrade(formData: FormData) {
     quantity,
     price,
     date,
-    remainingQty: 0,
+    remainingqty: 0,
     buyTradeId: buyTrade.id,
+    clientId: buyTrade.clientId,
   };
-  trades.push(sellTrade);
-  await writeTrades(trades);
-  // After sell trade, record cash inflow
-    const totalProceeds = quantity * price;
-    const cashTx: CashTransaction = {
-    id: generateId(),
-    amount: totalProceeds,
-    date: date,
-    type: 'sell',
-    description: `Sold ${quantity} ${buyTrade.symbol} @ ${price}`,
-    clientId: null,
-    };
-    const existingCash = await readCashTransactions();
-    existingCash.push(cashTx);
-    await writeCashTransactions(existingCash);
+  await addTrade(sellTrade);
   revalidatePath('/');
 }
 
-// ---------- Edit & Delete Holdings ----------
-export async function updateBuyTrade(formData: FormData) {
-  const tradeId = formData.get('tradeId') as string;
-  const quantity = Number(formData.get('quantity'));
-  const price = Number(formData.get('price'));
-  const date = formData.get('date') as string;
-
-  if (!tradeId || !quantity || !price || !date) throw new Error('Missing fields');
-
-  const trades = await readTrades();
-  const tradeIndex = trades.findIndex(t => t.id === tradeId && t.side === 'buy');
-  if (tradeIndex === -1) throw new Error('Trade not found');
-
-  const oldTrade = trades[tradeIndex];
-  const soldQuantity = oldTrade.quantity - oldTrade.remainingQty; // already sold shares
-
-  if (quantity < soldQuantity) {
-    throw new Error(`Cannot reduce quantity below already sold amount (${soldQuantity})`);
+// ---------- PSX API Integration (same as before) ----------
+export async function fetchPSXPrice(symbol: string): Promise<number | null> {
+  try {
+    const url = `https://dps.psx.com.pk/timeseries/int?symbol=${symbol}`;
+    const response = await fetch(url, {
+      headers: { 'Accept': 'application/json', 'User-Agent': 'TradeManager/1.0' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (data.status !== 1 || !Array.isArray(data.data) || data.data.length === 0) return null;
+    const latestTrade = data.data[data.data.length - 1];
+    const price = latestTrade[1];
+    return typeof price === 'number' ? price : null;
+  } catch (error) {
+    console.error(`Failed to fetch price for ${symbol}:`, error);
+    return null;
   }
-
-  // Update the trade
-  trades[tradeIndex] = {
-    ...oldTrade,
-    quantity,
-    price,
-    date,
-    remainingQty: quantity - soldQuantity,
-  };
-
-  await writeTrades(trades);
-  revalidatePath('/');
 }
-
-export async function deleteBuyTrade(tradeId: string) {
-  const trades = await readTrades();
-  const tradeIndex = trades.findIndex(t => t.id === tradeId && t.side === 'buy');
-  if (tradeIndex === -1) throw new Error('Trade not found');
-
-  // Remove all associated sell trades
-  const updatedTrades = trades.filter(t => {
-    if (t.side === 'sell' && t.buyTradeId === tradeId) return false;
-    if (t.id === tradeId) return false;
-    return true;
-  });
-
-  await writeTrades(updatedTrades);
-  revalidatePath('/');
-}
-
 
 export async function updateMarketPriceManual(formData: FormData) {
   const symbol = (formData.get('symbol') as string).toUpperCase();
@@ -156,62 +96,56 @@ export async function updateMarketPriceManual(formData: FormData) {
   const prices = await readMarketPrices();
   const existingIndex = prices.findIndex(p => p.symbol === symbol);
   const updatedPrice = { symbol, price, updatedAt: new Date().toISOString() };
-  
   if (existingIndex >= 0) {
     prices[existingIndex] = updatedPrice;
   } else {
     prices.push(updatedPrice);
   }
-  
   await writeMarketPrices(prices);
   revalidatePath('/');
 }
 
-// ---------- Dashboard ----------
 export async function getDashboardData() {
   const trades = await readTrades();
   const marketPrices = await readMarketPrices();
   const priceMap = new Map(marketPrices.map(p => [p.symbol, p.price]));
   
-  const buyTrades = trades.filter(t => t.side === 'buy' && t.remainingQty > 0);
+  const buyTrades = trades.filter(t => t.side === 'buy' && t.remainingqty > 0);
   const holdingsMap = new Map<string, {
     companyName: string;
     totalShares: number;
     totalCost: number;
     currentPrice: number;
     lots: any[];
-    originalBuyTrades: any[];
   }>();
   
   for (const buy of buyTrades) {
     const existing = holdingsMap.get(buy.symbol);
-    const cost = buy.remainingQty * buy.price;
+    const cost = buy.remainingqty * buy.price;
     if (existing) {
-      existing.totalShares += buy.remainingQty;
+      existing.totalShares += buy.remainingqty;
       existing.totalCost += cost;
       existing.lots.push({
         tradeId: buy.id,
         date: buy.date,
-        quantity: buy.remainingQty,
+        quantity: buy.remainingqty,
         buyPrice: buy.price,
-        remainingQty: buy.remainingQty,
+        remainingqty: buy.remainingqty,
       });
-      existing.originalBuyTrades.push(buy);
     } else {
       const currentPrice = priceMap.get(buy.symbol) || buy.price;
       holdingsMap.set(buy.symbol, {
         companyName: buy.companyName,
-        totalShares: buy.remainingQty,
+        totalShares: buy.remainingqty,
         totalCost: cost,
         currentPrice,
         lots: [{
           tradeId: buy.id,
           date: buy.date,
-          quantity: buy.remainingQty,
+          quantity: buy.remainingqty,
           buyPrice: buy.price,
-          remainingQty: buy.remainingQty,
+          remainingqty: buy.remainingqty,
         }],
-        originalBuyTrades: [buy],
       });
     }
   }
@@ -231,14 +165,13 @@ export async function getDashboardData() {
       pnl,
       pnlPercent,
       lots: data.lots,
-      originalBuyTrades: data.originalBuyTrades,
     };
   });
   
   const totalPortfolioValue = holdings.reduce((sum, h) => sum + h.currentValue, 0);
   
   const sellTrades = trades.filter(t => t.side === 'sell');
-  const sellRecords: SellRecord[] = [];
+  const sellRecords: any[] = [];
   for (const sell of sellTrades) {
     const buyTrade = trades.find(t => t.id === sell.buyTradeId);
     if (buyTrade) {
@@ -272,85 +205,4 @@ export async function getPnLForDateRange(startDate: string, endDate: string): Pr
       return sellDate >= start && sellDate <= end;
     })
     .reduce((sum, sell) => sum + sell.profit, 0);
-}
-
-export async function getPortfolioSummary() {
-  const { holdings, totalPortfolioValue } = await getDashboardData();
-  
-  let totalInvested = 0;
-  let totalRealizedPnL = 0;
-  
-  // Calculate total invested from holdings (cost basis of remaining shares)
-  for (const h of holdings) {
-    totalInvested += h.invested;
-  }
-  
-  // Realized P&L (from sell records)
-  const trades = await readTrades();
-  const sellTrades = trades.filter(t => t.side === 'sell');
-  for (const sell of sellTrades) {
-    const buyTrade = trades.find(t => t.id === sell.buyTradeId);
-    if (buyTrade) {
-      totalRealizedPnL += (sell.price - buyTrade.price) * sell.quantity;
-    }
-  }
-  
-  // Unrealized P&L (current value minus invested)
-  const totalUnrealizedPnL = totalPortfolioValue - totalInvested;
-  
-  return {
-    totalInvested,
-    totalPortfolioValue,
-    totalRealizedPnL,
-    totalUnrealizedPnL,
-    totalProfitLoss: totalRealizedPnL + totalUnrealizedPnL, // overall gain/loss
-  };
-}
-
-export async function getRealizedProfitForPeriod(startDate: string, endDate: string): Promise<number> {
-  const trades = await readTrades();
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  end.setHours(23, 59, 59, 999);
-  let profit = 0;
-  for (const sell of trades.filter(t => t.side === 'sell')) {
-    const sellDate = new Date(sell.date);
-    if (sellDate >= start && sellDate <= end) {
-      const buyTrade = trades.find(t => t.id === sell.buyTradeId);
-      if (buyTrade) profit += (sell.price - buyTrade.price) * sell.quantity;
-    }
-  }
-  return profit;
-}
-
-
-export async function getPortfolioMarketValue(): Promise<number> {
-  const { totalPortfolioValue } = await getDashboardData();
-  return totalPortfolioValue;
-}
-
-export async function getTotalInvestedAmount(): Promise<number> {
-  const trades = await readTrades();
-  let invested = 0;
-  for (const t of trades) {
-    if (t.side === 'buy') {
-      invested += t.remainingQty * t.price;
-    }
-  }
-  return invested;
-}
-export async function getPortfolioSummaryWithCash() {
-  const investedAmount = await getTotalInvestedAmount();
-  const portfolioMarketValue = await getPortfolioMarketValue();
-  const unrealizedPnL = portfolioMarketValue - investedAmount;
-  const cashBalance = await getGlobalCashBalance();
-  const totalAssets = cashBalance + portfolioMarketValue;
-
-  return {
-    cashBalance,
-    investedAmount,
-    portfolioMarketValue,
-    totalAssets,
-    unrealizedPnL,
-  };
 }

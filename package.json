@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.0",
     "csv-parse": "^6.2.1",
     "csv-stringify": "^6.7.0",
     "date-fns": "^4.1.0",

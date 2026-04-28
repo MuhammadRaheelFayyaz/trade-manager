@@ -13,8 +13,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-  <html>
-    <body className="bg-gray-100">
+  <html suppressHydrationWarning>
+    <body className="bg-gray-100" suppressHydrationWarning>
       <nav className="bg-white shadow mb-6">
         <div className="container mx-auto px-4 py-3 flex gap-6">
           <Link href="/" className="font-semibold hover:text-blue-600">Portfolio</Link>
