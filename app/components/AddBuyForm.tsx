@@ -19,7 +19,7 @@ export default function AddBuyForm() {
   }
   
   return (
-    <div className="bg-white rounded-lg shadow p-6 fixed">
+    <div className="bg-white rounded-lg shadow p-6">
       <h2 className="text-xl font-semibold mb-4">Add Buy Trade</h2>
       <form id="buyForm" action={handleSubmit} className="space-y-4">
         <div>
