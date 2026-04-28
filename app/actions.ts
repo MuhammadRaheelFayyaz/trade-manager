@@ -147,45 +147,6 @@ export async function deleteBuyTrade(tradeId: string) {
   revalidatePath('/');
 }
 
-// ---------- PSX API Integration ----------
-export async function fetchPSXPrice(symbol: string): Promise<number | null> {
-  const url = `https://dps.psx.com.pk/timeseries/int?symbol=${symbol}`;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data?.status === 1 && Array.isArray(data.data) && data.data.length > 0) {
-      const price = data.data[0][1];
-      if (typeof price === 'number') return price;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-export async function refreshAllMarketPrices() {
-  const trades = await readTrades();
-  const symbols = [...new Set(trades.filter(t => t.side === 'buy').map(t => t.symbol))];
-  if (symbols.length === 0) return { success: false, message: 'No holdings' };
-
-  const results = await Promise.all(symbols.map(async (symbol) => {
-    const price = await fetchPSXPrice(symbol);
-    return { symbol, price, updatedAt: new Date().toISOString() };
-  }));
-
-  const valid = results.filter(r => r.price !== null);
-  if (valid.length === 0) return { success: false, message: 'Could not fetch any prices' };
-
-  const existingPrices = await readMarketPrices();
-  const priceMap = new Map(existingPrices.map(p => [p.symbol, p]));
-  for (const v of valid) {
-    priceMap.set(v.symbol, { symbol: v.symbol, price: v.price!, updatedAt: v.updatedAt });
-  }
-  await writeMarketPrices(Array.from(priceMap.values()));
-  revalidatePath('/');
-  return { success: true, count: valid.length };
-}
 
 export async function updateMarketPriceManual(formData: FormData) {
   const symbol = (formData.get('symbol') as string).toUpperCase();

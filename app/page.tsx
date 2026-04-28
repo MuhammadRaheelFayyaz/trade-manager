@@ -1,48 +1,34 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { getDashboardData, getPortfolioSummaryWithCash, refreshAllMarketPrices } from './actions';
+import { useEffect, useState, useRef } from 'react';
+import { getDashboardData } from './actions';
 import HoldingsTable from './components/HoldingsTable';
 import AddBuyForm from './components/AddBuyForm';
 import PnLReport from './components/PnLReport';
 import { Holding } from '@/app/types';
+import { toZonedTime } from 'date-fns-tz';
+
+const TIMEZONE = 'Asia/Karachi';
+const TRADING_START = 9.5; // 9:30 AM = 9.5 hours
+const TRADING_END = 16.5;   // 4:30 PM = 16.5 hours
 
 export default function Home() {
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [totalValue, setTotalValue] = useState(0);
-  const [totalInvested, setTotalInvested] = useState(0);
-  const [totalProfitLoss, setTotalProfitLoss] = useState(0);
-  const [totalProfitLossPercent, setTotalProfitLossPercent] = useState(0);
-  const [priceMap, setPriceMap] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [refreshingPrices, setRefreshingPrices] = useState(false);
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
-  const [portfolioSummary, setPortfolioSummary] = useState({ cashBalance: 0, investedAmount: 0, portfolioMarketValue: 0, totalAssets: 0, unrealizedPnL: 0 });
-  
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [nextRefresh, setNextRefresh] = useState<Date | null>(null);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   async function loadData() {
     setLoading(true);
     try {
       const data = await getDashboardData();
       setHoldings(data.holdings);
       setTotalValue(data.totalPortfolioValue);
-      setPriceMap(data.priceMap);
-      
-      // Calculate totals from holdings
-      let invested = 0;
-      let unrealizedPnl = 0;
-      for (const h of data.holdings) {
-        invested += h.invested;
-        unrealizedPnl += h.pnl;
-      }
-      setTotalInvested(invested);
-      setTotalProfitLoss(unrealizedPnl);
-      if (invested > 0) {
-        setTotalProfitLossPercent((unrealizedPnl / invested) * 100);
-      } else {
-        setTotalProfitLossPercent(0);
-      }
-      const summary = await getPortfolioSummaryWithCash();
-      setPortfolioSummary(summary);
     } catch (error) {
       console.error(error);
     } finally {
@@ -51,37 +37,122 @@ export default function Home() {
   }
 
   async function handleRefreshPrices() {
+    if (refreshingPrices) return;
     setRefreshingPrices(true);
     try {
-      const result = await refreshAllMarketPrices();
+      const response = await fetch('/api/refresh-prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = await response.json();
       if (result.success) {
         await loadData();
         setLastRefresh(new Date());
-        console.log('Prices refreshed successfully');
       } else {
-        console.warn('Failed to fetch prices:', result.message);
+        console.warn('Refresh failed:', result.message);
       }
     } catch (error) {
-      console.error('Error refreshing prices:', error);
+      console.error('Refresh error:', error);
     } finally {
       setRefreshingPrices(false);
     }
   }
 
-  // Auto-refresh every minute
-  useEffect(() => {
-    // Initial load
-    loadData();
+  // Check if current time is within trading hours (PKT time, weekdays only)
+  function isTradingTime(): boolean {
+    const nowPKT = toZonedTime(new Date(), TIMEZONE);
+    const day = nowPKT.getDay(); // 0 = Sunday, 6 = Saturday
+    const hour = nowPKT.getHours();
+    const minute = nowPKT.getMinutes();
+    const currentHourDecimal = hour + minute / 60;
     
-    // Set up interval to refresh prices every 60 seconds
-    const intervalId = setInterval(() => {
-      console.log('Auto-refreshing market prices...');
-      handleRefreshPrices();
-    }, 60000); // 60,000 milliseconds = 1 minute
+    // Monday to Friday (1-5) and between 9:30 and 16:30
+    return day >= 1 && day <= 5 && currentHourDecimal >= TRADING_START && currentHourDecimal < TRADING_END;
+  }
 
-    // Cleanup interval on component unmount
-    return () => clearInterval(intervalId);
-  }, []); // Empty dependency array ensures this runs once on mount
+  // Schedule next refresh at the next minute boundary (e.g., 00 seconds)
+  function scheduleNextRefresh() {
+    if (!autoRefresh) {
+      setNextRefresh(null);
+      return;
+    }
+
+    const now = new Date();
+    const nextMinute = new Date(now);
+    nextMinute.setSeconds(0, 0);
+    nextMinute.setMinutes(nextMinute.getMinutes() + 1);
+    
+    // If next minute is after trading hours, schedule at next trading day start
+    let targetTime = nextMinute;
+    const targetPKT = toZonedTime(targetTime, TIMEZONE);
+    let hourDecimal = targetPKT.getHours() + targetPKT.getMinutes() / 60;
+    let isWeekend = targetPKT.getDay() === 0 || targetPKT.getDay() === 6;
+    
+    if (hourDecimal >= TRADING_END || isWeekend || hourDecimal < TRADING_START) {
+      // Find next trading day 9:30 AM PKT
+      const nextTradingStart = new Date(targetTime);
+      nextTradingStart.setUTCHours(0, 0, 0, 0);
+      // Convert to PKT date by adding 5 hours UTC offset
+      // We'll use a simpler approach: increment day until we find a weekday
+      let daysToAdd = 1;
+      let found = false;
+      while (!found) {
+        const checkDate = new Date(targetTime);
+        checkDate.setUTCDate(checkDate.getUTCDate() + daysToAdd);
+        const checkPKT = toZonedTime(checkDate, TIMEZONE);
+        const hourDec = 9.5; // Start time
+        if (checkPKT.getDay() >= 1 && checkPKT.getDay() <= 5) {
+          // Set to 9:30 AM PKT that day
+          const startTime = new Date(checkDate);
+          startTime.setUTCHours(4, 30, 0, 0); // 9:30 PKT = 4:30 UTC
+          targetTime = startTime;
+          found = true;
+          break;
+        }
+        daysToAdd++;
+      }
+    }
+    
+    const delay = targetTime.getTime() - Date.now();
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      if (autoRefresh && isTradingTime()) {
+        handleRefreshPrices().finally(() => {
+          scheduleNextRefresh();
+        });
+      } else if (autoRefresh) {
+        // Not trading time, schedule next check at trading start tomorrow
+        scheduleNextRefresh();
+      }
+    }, Math.max(0, delay));
+    
+    setNextRefresh(targetTime);
+  }
+
+  // Start/stop auto-refresh based on toggle and trading hours
+  // useEffect(() => {
+  //   if (autoRefresh) {
+  //     // Immediate first check if within trading hours
+  //     if (isTradingTime()) {
+  //       handleRefreshPrices().finally(() => scheduleNextRefresh());
+  //     } else {
+  //       scheduleNextRefresh();
+  //     }
+  //   } else {
+  //     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  //     setNextRefresh(null);
+  //   }
+    
+  //   return () => {
+  //     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  //     if (intervalRef.current) clearInterval(intervalRef.current);
+  //   };
+  // }, [autoRefresh]);
+
+  // Initial data load
+  useEffect(() => {
+    loadData();
+  }, []);
 
   if (loading) {
     return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
@@ -96,7 +167,16 @@ export default function Home() {
               <h1 className="text-3xl font-bold text-gray-900">Trade Manager with PSX Live Prices</h1>
               <p className="text-gray-600">Track holdings, partial sells, and P&L using real-time PSX data</p>
             </div>
-            <div className="text-right">
+            <div className="flex gap-3 items-center">
+              <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg shadow">
+                <span className="text-sm font-medium">Auto Refresh</span>
+                <button
+                  onClick={() => setAutoRefresh(!autoRefresh)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${autoRefresh ? 'bg-green-600' : 'bg-gray-300'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoRefresh ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
               <button
                 onClick={handleRefreshPrices}
                 disabled={refreshingPrices}
@@ -104,62 +184,44 @@ export default function Home() {
               >
                 {refreshingPrices ? 'Fetching...' : 'Refresh Now'}
               </button>
-              <div className="text-xs text-gray-500 mt-1">
-                Auto-refreshes every minute<br/>
-                Last: {lastRefresh.toLocaleTimeString()}
-              </div>
             </div>
           </div>
+          {autoRefresh && nextRefresh && (
+            <div className="mt-2 text-sm text-gray-500">
+              Last refresh: {lastRefresh ? lastRefresh.toLocaleTimeString() : 'Never'} | 
+              Next auto-refresh: {nextRefresh.toLocaleTimeString()}
+            </div>
+          )}
         </header>
-       
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            {/* Portfolio Summary Card */}
-        <div className="bg-white rounded-lg shadow p-4">
-          <h2 className="text-lg font-semibold mb-3">Portfolio Summary</h2>
-          <div className="flex flex-wrap gap-4">
-            {/* <div>
-              <div className="text-sm text-gray-500">Total Cash</div>
-              <div className="text-xl font-bold text-gray-800">{portfolioSummary.cashBalance.toFixed(2)} PKR</div>
-            </div> */}
-            <div>
-              <div className="text-sm text-gray-500">Invested (Cost)</div>
-              <div className="text-xl font-bold text-gray-800">{portfolioSummary.investedAmount.toFixed(2)} PKR</div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500">Stock Value</div>
-              <div className="text-xl font-bold text-gray-800">{portfolioSummary.portfolioMarketValue.toFixed(2)} PKR</div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500">Total Assets</div>
-              <div className="text-xl font-bold text-gray-800">{portfolioSummary.totalAssets.toFixed(2)} PKR</div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500">Unrealized P&L</div>
-              <div className={`text-xl font-bold ${portfolioSummary.unrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {portfolioSummary.unrealizedPnL >= 0 ? '+' : ''}{portfolioSummary.unrealizedPnL.toFixed(2)} PKR
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-lg font-semibold">Portfolio Summary</h2>
+                <button onClick={loadData} className="text-blue-600 text-sm">Refresh Holdings</button>
               </div>
+              <div className="mt-2 text-2xl font-bold">{totalValue.toFixed(2)} PKR</div>
+              <div className="text-sm text-gray-500">Total Portfolio Value (based on latest market prices)</div>
+            </div>
+
+            <HoldingsTable holdings={holdings} totalPortfolioValue={totalValue} onRefresh={loadData} />
+            <PnLReport />
+          </div>
+
+          <div className="space-y-6">
+            <AddBuyForm />
+
+            <div className="bg-blue-50 rounded-lg shadow p-4">
+              <h3 className="font-semibold mb-2">Auto-Refresh Settings</h3>
+              <ul className="text-sm space-y-1 text-gray-700">
+                <li>• Auto-refresh every minute during PSX trading hours (9:30 AM - 4:30 PM PKT)</li>
+                <li>• Only on weekdays (Monday to Friday)</li>
+                <li>• Toggle ON/OFF with the switch above</li>
+                <li>• Manual refresh also available</li>
+              </ul>
             </div>
           </div>
-          <div className="mt-2 text-xs text-gray-400">Based on latest market prices (auto-refresh every minute)</div>
-          {/* <div className="mt-2 text-xs text-gray-400">Remaining cash = {portfolioSummary.cashBalance.toFixed(2)} PKR</div> */}
-        </div>
-        <HoldingsTable holdings={holdings} totalPortfolioValue={totalValue} onRefresh={loadData} />
-        <PnLReport />
-      </div>
-      <div className="space-y-6">
-        <AddBuyForm />
-        {/* <div className="bg-blue-50 rounded-lg shadow p-4">
-          <h3 className="font-semibold mb-2">Auto-Refresh Active</h3>
-          <ul className="text-sm space-y-1 text-gray-700">
-            <li>• Market prices refresh automatically every minute</li>
-            <li>• Click "Refresh Now" for immediate update</li>
-            <li>• Unrealized P&L updates in real-time</li>
-            <li>• All data stored in CSV files</li>
-            <li>• Edit/Delete holdings from the table</li>
-          </ul>
-        </div> */}
-      </div>
         </div>
       </div>
     </div>

@@ -35,6 +35,5 @@ export async function writeCashTransactions(txs: CashTransaction[]) {
 
 export async function getGlobalCashBalance(): Promise<number> {
   const txs = await readCashTransactions();
-  console.log('txs', txs)
   return txs.reduce((sum, tx) => sum + tx.amount, 0);
 }
