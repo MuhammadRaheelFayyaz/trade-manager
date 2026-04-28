@@ -39,7 +39,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-# CSV data files (trade records, market prices)
-data/*.csv
-*.csv
