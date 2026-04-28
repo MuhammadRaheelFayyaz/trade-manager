@@ -2,7 +2,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { readTrades, writeTrades, readMarketPrices, writeMarketPrices } from '@/app/lib/csv';
-import { Trade, SellRecord } from '@/app/types';
+import { Trade, SellRecord, CashTransaction } from '@/app/types';
+import { readCashTransactions, writeCashTransactions, getGlobalCashBalance } from '@/app/lib/csv-cash';
+
 
 function generateId(): string {
   return Date.now().toString() + '-' + Math.random().toString(36).substr(2, 6);
@@ -32,6 +34,20 @@ export async function addBuyTrade(formData: FormData) {
   };
   trades.push(newTrade);
   await writeTrades(trades);
+
+  const totalCost = quantity * price;
+  const cashTx: CashTransaction = {
+    id: generateId(),
+    amount: -totalCost,
+    date,
+    type: 'buy',
+    description: `Bought ${quantity} ${symbol} @ ${price}`,
+    clientId: null,
+  };
+  const existingCash = await readCashTransactions();
+  existingCash.push(cashTx);
+  await writeCashTransactions(existingCash);
+
   revalidatePath('/');
 }
 
@@ -66,6 +82,19 @@ export async function addSellTrade(formData: FormData) {
   };
   trades.push(sellTrade);
   await writeTrades(trades);
+  // After sell trade, record cash inflow
+    const totalProceeds = quantity * price;
+    const cashTx: CashTransaction = {
+    id: generateId(),
+    amount: totalProceeds,
+    date: date,
+    type: 'sell',
+    description: `Sold ${quantity} ${buyTrade.symbol} @ ${price}`,
+    clientId: null,
+    };
+    const existingCash = await readCashTransactions();
+    existingCash.push(cashTx);
+    await writeCashTransactions(existingCash);
   revalidatePath('/');
 }
 
@@ -282,4 +311,85 @@ export async function getPnLForDateRange(startDate: string, endDate: string): Pr
       return sellDate >= start && sellDate <= end;
     })
     .reduce((sum, sell) => sum + sell.profit, 0);
+}
+
+export async function getPortfolioSummary() {
+  const { holdings, totalPortfolioValue } = await getDashboardData();
+  
+  let totalInvested = 0;
+  let totalRealizedPnL = 0;
+  
+  // Calculate total invested from holdings (cost basis of remaining shares)
+  for (const h of holdings) {
+    totalInvested += h.invested;
+  }
+  
+  // Realized P&L (from sell records)
+  const trades = await readTrades();
+  const sellTrades = trades.filter(t => t.side === 'sell');
+  for (const sell of sellTrades) {
+    const buyTrade = trades.find(t => t.id === sell.buyTradeId);
+    if (buyTrade) {
+      totalRealizedPnL += (sell.price - buyTrade.price) * sell.quantity;
+    }
+  }
+  
+  // Unrealized P&L (current value minus invested)
+  const totalUnrealizedPnL = totalPortfolioValue - totalInvested;
+  
+  return {
+    totalInvested,
+    totalPortfolioValue,
+    totalRealizedPnL,
+    totalUnrealizedPnL,
+    totalProfitLoss: totalRealizedPnL + totalUnrealizedPnL, // overall gain/loss
+  };
+}
+
+export async function getRealizedProfitForPeriod(startDate: string, endDate: string): Promise<number> {
+  const trades = await readTrades();
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  end.setHours(23, 59, 59, 999);
+  let profit = 0;
+  for (const sell of trades.filter(t => t.side === 'sell')) {
+    const sellDate = new Date(sell.date);
+    if (sellDate >= start && sellDate <= end) {
+      const buyTrade = trades.find(t => t.id === sell.buyTradeId);
+      if (buyTrade) profit += (sell.price - buyTrade.price) * sell.quantity;
+    }
+  }
+  return profit;
+}
+
+
+export async function getPortfolioMarketValue(): Promise<number> {
+  const { totalPortfolioValue } = await getDashboardData();
+  return totalPortfolioValue;
+}
+
+export async function getTotalInvestedAmount(): Promise<number> {
+  const trades = await readTrades();
+  let invested = 0;
+  for (const t of trades) {
+    if (t.side === 'buy') {
+      invested += t.remainingQty * t.price;
+    }
+  }
+  return invested;
+}
+export async function getPortfolioSummaryWithCash() {
+  const investedAmount = await getTotalInvestedAmount();
+  const portfolioMarketValue = await getPortfolioMarketValue();
+  const unrealizedPnL = portfolioMarketValue - investedAmount;
+  const cashBalance = await getGlobalCashBalance();
+  const totalAssets = cashBalance + portfolioMarketValue;
+
+  return {
+    cashBalance,
+    investedAmount,
+    portfolioMarketValue,
+    totalAssets,
+    unrealizedPnL,
+  };
 }

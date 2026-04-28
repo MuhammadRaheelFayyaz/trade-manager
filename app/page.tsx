@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getDashboardData, refreshAllMarketPrices } from './actions';
+import { getDashboardData, getPortfolioSummaryWithCash, refreshAllMarketPrices } from './actions';
 import HoldingsTable from './components/HoldingsTable';
 import AddBuyForm from './components/AddBuyForm';
 import PnLReport from './components/PnLReport';
@@ -17,7 +17,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [refreshingPrices, setRefreshingPrices] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
-
+  const [portfolioSummary, setPortfolioSummary] = useState({ cashBalance: 0, investedAmount: 0, portfolioMarketValue: 0, totalAssets: 0, unrealizedPnL: 0 });
+  
   async function loadData() {
     setLoading(true);
     try {
@@ -40,6 +41,8 @@ export default function Home() {
       } else {
         setTotalProfitLossPercent(0);
       }
+      const summary = await getPortfolioSummaryWithCash();
+      setPortfolioSummary(summary);
     } catch (error) {
       console.error(error);
     } finally {
@@ -112,51 +115,51 @@ export default function Home() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             {/* Portfolio Summary Card */}
-          <div className="bg-white rounded-lg shadow p-4 mb-4">
-            <h2 className="text-lg font-semibold mb-3">Portfolio Summary</h2>
-            <div className="flex gap-6 flex-wrap justify-start ">
+        <div className="bg-white rounded-lg shadow p-4">
+          <h2 className="text-lg font-semibold mb-3">Portfolio Summary</h2>
+          <div className="flex flex-wrap gap-4">
+            {/* <div>
+              <div className="text-sm text-gray-500">Total Cash</div>
+              <div className="text-xl font-bold text-gray-800">{portfolioSummary.cashBalance.toFixed(2)} PKR</div>
+            </div> */}
             <div>
-              <div className="text-sm text-gray-500">Total Invested</div>
-              <div className="text-xl font-bold text-gray-800">{totalInvested.toFixed(2)} PKR</div>
+              <div className="text-sm text-gray-500">Invested (Cost)</div>
+              <div className="text-xl font-bold text-gray-800">{portfolioSummary.investedAmount.toFixed(2)} PKR</div>
             </div>
             <div>
-              <div className="text-sm text-gray-500">Current Value</div>
-              <div className="text-xl font-bold text-gray-800">{totalValue.toFixed(2)} PKR</div>
+              <div className="text-sm text-gray-500">Stock Value</div>
+              <div className="text-xl font-bold text-gray-800">{portfolioSummary.portfolioMarketValue.toFixed(2)} PKR</div>
+            </div>
+            <div>
+              <div className="text-sm text-gray-500">Total Assets</div>
+              <div className="text-xl font-bold text-gray-800">{portfolioSummary.totalAssets.toFixed(2)} PKR</div>
             </div>
             <div>
               <div className="text-sm text-gray-500">Unrealized P&L</div>
-              <div className={`text-xl font-bold ${totalProfitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {totalProfitLoss >= 0 ? '+' : ''}{totalProfitLoss.toFixed(2)} PKR
-              </div>
-            </div>
-            <div>
-              <div className="text-sm text-gray-500">P&L %</div>
-              <div className={`text-xl font-bold ${totalProfitLossPercent >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {totalProfitLossPercent >= 0 ? '+' : ''}{totalProfitLossPercent.toFixed(2)}%
+              <div className={`text-xl font-bold ${portfolioSummary.unrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {portfolioSummary.unrealizedPnL >= 0 ? '+' : ''}{portfolioSummary.unrealizedPnL.toFixed(2)} PKR
               </div>
             </div>
           </div>
           <div className="mt-2 text-xs text-gray-400">Based on latest market prices (auto-refresh every minute)</div>
+          {/* <div className="mt-2 text-xs text-gray-400">Remaining cash = {portfolioSummary.cashBalance.toFixed(2)} PKR</div> */}
         </div>
-
-            <HoldingsTable holdings={holdings} totalPortfolioValue={totalValue} onRefresh={loadData} />
-            <PnLReport />
-          </div>
-
-          <div className="space-y-6">
-            <AddBuyForm />
-
-            <div className="bg-blue-50 rounded-lg shadow p-4">
-              <h3 className="font-semibold mb-2">Auto-Refresh Active</h3>
-              <ul className="text-sm space-y-1 text-gray-700">
-                <li>• Market prices refresh automatically every minute</li>
-                <li>• Click "Refresh Now" for immediate update</li>
-                <li>• Unrealized P&L updates in real-time</li>
-                <li>• All data stored in CSV files</li>
-                <li>• Edit/Delete holdings from the table</li>
-              </ul>
-            </div>
-          </div>
+        <HoldingsTable holdings={holdings} totalPortfolioValue={totalValue} onRefresh={loadData} />
+        <PnLReport />
+      </div>
+      <div className="space-y-6">
+        <AddBuyForm />
+        {/* <div className="bg-blue-50 rounded-lg shadow p-4">
+          <h3 className="font-semibold mb-2">Auto-Refresh Active</h3>
+          <ul className="text-sm space-y-1 text-gray-700">
+            <li>• Market prices refresh automatically every minute</li>
+            <li>• Click "Refresh Now" for immediate update</li>
+            <li>• Unrealized P&L updates in real-time</li>
+            <li>• All data stored in CSV files</li>
+            <li>• Edit/Delete holdings from the table</li>
+          </ul>
+        </div> */}
+      </div>
         </div>
       </div>
     </div>
