@@ -130,24 +130,24 @@ export default function Home() {
   }
 
   // Start/stop auto-refresh based on toggle and trading hours
-  // useEffect(() => {
-  //   if (autoRefresh) {
-  //     // Immediate first check if within trading hours
-  //     if (isTradingTime()) {
-  //       handleRefreshPrices().finally(() => scheduleNextRefresh());
-  //     } else {
-  //       scheduleNextRefresh();
-  //     }
-  //   } else {
-  //     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-  //     setNextRefresh(null);
-  //   }
+  useEffect(() => {
+    if (autoRefresh) {
+      // Immediate first check if within trading hours
+      if (isTradingTime()) {
+        handleRefreshPrices().finally(() => scheduleNextRefresh());
+      } else {
+        scheduleNextRefresh();
+      }
+    } else {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      setNextRefresh(null);
+    }
     
-  //   return () => {
-  //     if (timeoutRef.current) clearTimeout(timeoutRef.current);
-  //     if (intervalRef.current) clearInterval(intervalRef.current);
-  //   };
-  // }, [autoRefresh]);
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [autoRefresh]);
 
   // Initial data load
   useEffect(() => {
